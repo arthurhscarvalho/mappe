@@ -1,5 +1,6 @@
 # Custom
 experiments/
+*.xlsx
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
