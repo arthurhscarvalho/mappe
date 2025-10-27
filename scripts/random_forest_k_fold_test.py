@@ -145,10 +145,14 @@ def evaluate_random_forest(
 
         # Train Random Forest
         rf = RandomForestRegressor(
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            random_state=random_state,
+            random_state=42,
+            n_estimators=300,
             n_jobs=-1,
+            max_depth=30,
+            max_features=8,
+            max_samples=0.25,
+            min_samples_leaf=1,
+            min_samples_split=2,
         )
         rf.fit(X_train, y_train)
 

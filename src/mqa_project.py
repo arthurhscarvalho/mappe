@@ -1,58 +1,25 @@
 import os
 import time
 import warnings
-from math import pi as PI
+from concurrent.futures import ThreadPoolExecutor, wait
 
+import mesh_projector as mp
 import numpy as np
 import pandas as pd
 import torch
-from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor, wait
 from piq import DISTS
-
-import mesh_projector as mp
 from pointpca3 import compute_pointpca3
+from tqdm import tqdm
 
+import config
 
+MAX_WORKERS = 10
 # Ignore tensorflow warnings
 warnings.filterwarnings("ignore")
 print(f"CUDA available: {torch.cuda.is_available()}")
 
-# Project parameters
-SEARCH_SIZE = 361
-MAX_WORKERS = 10
-PC_DENSITY = 0.3
 
-# Rendering configuration
-RENDER_CONFIG = mp.RenderConfig(
-    resolution=512,
-    ignore_opacity=True,
-)
-
-# Lighting configuration
-LIGHT_CONFIG_IQA = mp.PointLights(
-    positions=[
-        (-1.0, 1.0, 1.0),
-        (1.0, 1.0, -1.0),
-    ],
-    global_ambient=(0.6, 0.6, 0.6),
-    global_diffuse=(0.6, 0.6, 0.6),
-    global_specular=(0.0, 0.0, 0.0),
-)
-LIGHT_CONFIG_PCQA = LIGHT_CONFIG_IQA
-
-# View angles (projected views)
-VIEW_ANGLES = [
-    (0.0, 0.0, 0.0),  # Front: Cam at +Z, looking -Z.
-    (0.0, PI, 0.0),  # Back: Cam at -Z, looking +Z.
-    (0.0, PI / 2.0, 0.0),  # Right: Cam at +X, looking -X.
-    (0.0, -PI / 2.0, 0.0),  # Left: Cam at -X, looking +X.
-    (PI / 2.0, 0.0, 0.0),  # Top: Cam at +Y, looking -Y.
-    (-PI / 2.0, 0.0, 0.0),  # Bottom: Cam at -Y, looking +Y.
-]
-
-
-def init_dists(device: torch.device):
+def init_dists(device: torch.device) -> DISTS:
     model = DISTS(reduction="none").to(device)
     return model
 
@@ -93,9 +60,19 @@ def prepare_single_tensor(array: np.ndarray, device: torch.device):
     return tensor
 
 
-def process_iqa(ref_mesh, dst_mesh, dists, device):
-    ref_projs, _, _, _ = mp.project_to_images(ref_mesh, VIEW_ANGLES, LIGHT_CONFIG_IQA)
-    dst_projs, _, _, _ = mp.project_to_images(dst_mesh, VIEW_ANGLES, LIGHT_CONFIG_IQA)
+def process_iqa(
+    ref_mesh: mp.Mesh,
+    dst_mesh: mp.Mesh,
+    config: config.DatasetConfig,
+    dists: DISTS,
+    device: torch.device,
+) -> dict:
+    ref_projs, _, _, _ = mp.project_to_images(
+        ref_mesh, config.view_angles, config.light_config_iqa
+    )
+    dst_projs, _, _, _ = mp.project_to_images(
+        dst_mesh, config.view_angles, config.light_config_iqa
+    )
     with torch.no_grad():
         ref_projs = prepare_single_tensor(ref_projs, device)
         dst_projs = prepare_single_tensor(dst_projs, device)
@@ -106,10 +83,16 @@ def process_iqa(ref_mesh, dst_mesh, dists, device):
     return indices_data
 
 
-def process_pcqa(ref_mesh, dst_mesh):
-    ref_pc = mp.project_to_point_cloud(ref_mesh, LIGHT_CONFIG_PCQA, PC_DENSITY)
-    dst_pc = mp.project_to_point_cloud(dst_mesh, LIGHT_CONFIG_PCQA, PC_DENSITY)
-    pcqa_indices = compute_pointpca3(*ref_pc, *dst_pc, SEARCH_SIZE, MAX_WORKERS)
+def process_pcqa(
+    ref_mesh: mp.Mesh, dst_mesh: mp.Mesh, config: config.DatasetConfig
+) -> dict:
+    ref_pc = mp.project_to_point_cloud(
+        ref_mesh, config.light_config_pcqa, config.pc_density
+    )
+    dst_pc = mp.project_to_point_cloud(
+        dst_mesh, config.light_config_pcqa, config.pc_density
+    )
+    pcqa_indices = compute_pointpca3(*ref_pc, *dst_pc, config.search_size, MAX_WORKERS)
     indices_data = {
         "PCQA_REF_PC_NUM_POINTS": ref_pc[0].shape[0],
         "PCQA_DST_PC_NUM_POINTS": dst_pc[0].shape[0],
@@ -119,7 +102,9 @@ def process_pcqa(ref_mesh, dst_mesh):
     return indices_data
 
 
-def compute_features(row: pd.Series, dataset_base_path: str) -> dict:
+def compute_features(
+    row: pd.Series, dataset_base_path: str, config: config.DatasetConfig
+) -> dict:
     ref_obj_location = row["REF_OBJ_LOCATION"]
     dst_obj_location = row["SIGNAL_OBJ_LOCATION"]
     ref_obj_location = os.path.join(dataset_base_path, ref_obj_location)
@@ -133,14 +118,14 @@ def compute_features(row: pd.Series, dataset_base_path: str) -> dict:
         t0 = time.time()
         # Read meshes
         ref_mesh, dst_mesh, dists = process_io(
-            ref_obj_location, dst_obj_location, RENDER_CONFIG, device
+            ref_obj_location, dst_obj_location, config.render_config, device
         )
         t1 = time.time()
         # Compute metrics
         device = "cuda" if torch.cuda.is_available() else "cpu"
         futures = [
-            executor.submit(process_iqa, ref_mesh, dst_mesh, dists, device),
-            executor.submit(process_pcqa, ref_mesh, dst_mesh),
+            executor.submit(process_iqa, ref_mesh, dst_mesh, config, dists, device),
+            executor.submit(process_pcqa, ref_mesh, dst_mesh, config),
         ]
         wait(futures)
         for future in futures:
@@ -158,19 +143,24 @@ def compute_features(row: pd.Series, dataset_base_path: str) -> dict:
         "TIME_DELTA_INFERENCE": t2 - t1,
         "TIME_DELTA_END_TO_END": t2 - t0,
         "MAX_WORKERS": MAX_WORKERS,
-        "RENDER_CONFIG": RENDER_CONFIG.model_dump(),
-        "IQA_LIGHT_CONFIG": LIGHT_CONFIG_IQA.model_dump(),
-        "IQA_VIEW_ANGLES": VIEW_ANGLES,
-        "PCQA_SEARCH_SIZE": SEARCH_SIZE,
-        "PCQA_PC_DENSITY": PC_DENSITY,
-        "PCQA_LIGHT_CONFIG": LIGHT_CONFIG_PCQA.model_dump(),
+        "RENDER_CONFIG": config.render_config.model_dump(),
+        "IQA_LIGHT_CONFIG": config.light_config_iqa.model_dump(),
+        "IQA_VIEW_ANGLES": config.view_angles,
+        "PCQA_SEARCH_SIZE": config.search_size,
+        "PCQA_PC_DENSITY": config.pc_density,
+        "PCQA_LIGHT_CONFIG": config.light_config_pcqa.model_dump(),
     }
     result_row.update(iqa_indices)
     result_row.update(pcqa_indices)
     return result_row
 
 
-def run_experiment(path_dataset_csv: str, dataset_path: str = "", output_csv: str = ""):
+def run_experiment(
+    path_dataset_csv: str,
+    config: config.DatasetConfig,
+    dataset_path: str = "",
+    output_csv: str = "",
+):
     if not output_csv:
         raise ValueError("Invalid output_csv (Empty str or None)")
     folder_path = os.path.dirname(output_csv)
@@ -179,11 +169,11 @@ def run_experiment(path_dataset_csv: str, dataset_path: str = "", output_csv: st
     result_rows = []
     # Compute for the first row (warmup)
     first_row = df.iloc[0]
-    compute_features(first_row, dataset_path)
+    compute_features(first_row, dataset_path, config)
     # Now run the pipeline
     for idx, row in tqdm(df.iterrows(), "Processing rows", len(df)):
         try:
-            result_row = compute_features(row, dataset_path)
+            result_row = compute_features(row, dataset_path, config)
         except Exception as e:
             print(f"Exception on row {idx}:")
             print(e)
@@ -196,38 +186,44 @@ def run_experiment(path_dataset_csv: str, dataset_path: str = "", output_csv: st
 if __name__ == "__main__":
     BASE_PATH = "/home/arthurc/meshes/"
 
-    run_experiment(
-        "data/SJTU-TMQA.csv",
-        BASE_PATH,
-        "experiments/SJTU_MQAProject.csv",
-    )
+    # run_experiment(
+    #     path_dataset_csv="data/SJTU-TMQA.csv",
+    #     config=config.SJTUConfig(),
+    #     dataset_path=BASE_PATH,
+    #     output_csv="experiments/SJTU_MQAProject.csv",
+    # )
+
+    # run_experiment(
+    #     path_dataset_csv="data/TSMD.csv",
+    #     config=config.TSMDConfig(),
+    #     dataset_path=BASE_PATH,
+    #     output_csv="experiments/TSMD_MQAProject.csv",
+    # )
 
     run_experiment(
-        "data/TSMD.csv",
-        BASE_PATH,
-        "experiments/TSMD_MQAProject.csv",
+        path_dataset_csv="data/TexturedMeshQuality.csv",
+        config=config.TexturedMeshQualityConfig(),
+        dataset_path=BASE_PATH,
+        output_csv="experiments/TMQ_MQAProject.csv",
     )
 
-    run_experiment(
-        "data/TexturedMeshQuality.csv",
-        BASE_PATH,
-        "experiments/TMQ_MQAProject.csv",
-    )
+    # run_experiment(
+    #     path_dataset_csv="data/Yana_TAP_2021_ACR-HR.csv",
+    #     config=config.YanaTAPConfig(),
+    #     dataset_path=BASE_PATH,
+    #     output_csv="experiments/Yana_TAP_2021_ACR-HR_MQAProject.csv",
+    # )
 
-    run_experiment(
-        "data/Yana_TAP_2021_ACR-HR.csv",
-        BASE_PATH,
-        "experiments/Yana_TAP_2021_ACR-HR_MQAProject.csv",
-    )
+    # run_experiment(
+    #     path_dataset_csv="data/Yana_TAP_2021_DSIS.csv",
+    #     config=config.YanaTAPConfig(),
+    #     dataset_path=BASE_PATH,
+    #     output_csv="experiments/Yana_TAP_2021_DSIS_MQAProject.csv",
+    # )
 
-    run_experiment(
-        "data/Yana_TAP_2021_DSIS.csv",
-        BASE_PATH,
-        "experiments/Yana_TAP_2021_DSIS_MQAProject.csv",
-    )
-
-    run_experiment(
-        "data/Yana_TAP_2021_SAMVIQ.csv",
-        BASE_PATH,
-        "experiments/Yana_TAP_2021_SAMVIQ_MQAProject.csv",
-    )
+    # run_experiment(
+    #     path_dataset_csv="data/Yana_TAP_2021_SAMVIQ.csv",
+    #     config=config.YanaTAPConfig(),
+    #     dataset_path=BASE_PATH,
+    #     output_csv="experiments/Yana_TAP_2021_SAMVIQ_MQAProject.csv",
+    # )
