@@ -7,20 +7,23 @@ import mesh_projector as mp
 import mqa_project
 import pandas as pd
 import torch
-from dataset_configs import TexturedMeshQualityConfig
+from dataset_configs import TSMDConfig
 from mqa_project import MQAConfig
 from pydantic import BaseModel, ConfigDict
 from tqdm import tqdm
 
+# Setup
+MAX_WORKERS = 10
+DATASET_BASE_PATH = "/home/arthurc/Documents/meshes/"
+
 # Study configuration
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATASET_CSV = PROJECT_ROOT / "data" / "TexturedMeshQuality.csv"
-DATASET_BASE_PATH = "/home/arthurc/Documents/meshes/"
-OUTPUT_DIR = PROJECT_ROOT / "experiments" / "ablation_study"
+DATASET_CSV = PROJECT_ROOT / "data" / "TSMD.csv"
+OUTPUT_DIR = PROJECT_ROOT / "experiments" / "ablation_study_tsmd"
 
 VIEW_COUNTS = (1, 3, 6, 12, 20)
 PC_DENSITIES = (0.3, 0.5, 1.0)
-MAX_WORKERS = 10
+SEARCH_SIZES = (121, 289, 361)
 
 RGB_07 = (0.7, 0.7, 0.7)
 RGB_06 = (0.6, 0.6, 0.6)
@@ -37,33 +40,7 @@ class LightVariant(BaseModel):
 
 LIGHT_VARIANTS = (
     LightVariant(
-        name="baseline_tmq",
-        iqa_light_config=mp.Headlight(
-            global_ambient=RGB_07,
-            global_diffuse=RGB_07,
-            global_specular=RGB_00,
-        ),
-        pcqa_light_config=mp.AmbientLight(
-            global_ambient=RGB_07,
-            global_diffuse=RGB_07,
-            global_specular=RGB_00,
-        ),
-    ),
-    LightVariant(
-        name="flat_ambient",
-        iqa_light_config=mp.AmbientLight(
-            global_ambient=RGB_07,
-            global_diffuse=RGB_07,
-            global_specular=RGB_00,
-        ),
-        pcqa_light_config=mp.AmbientLight(
-            global_ambient=RGB_07,
-            global_diffuse=RGB_07,
-            global_specular=RGB_00,
-        ),
-    ),
-    LightVariant(
-        name="two_point_cross",
+        name="baseline_tsmd",
         iqa_light_config=mp.PointLights(
             positions=[
                 (-1.0, 1.0, 1.0),
@@ -83,6 +60,32 @@ LIGHT_VARIANTS = (
             global_specular=RGB_00,
         ),
     ),
+    LightVariant(
+        name="flat_ambient",
+        iqa_light_config=mp.AmbientLight(
+            global_ambient=RGB_07,
+            global_diffuse=RGB_07,
+            global_specular=RGB_00,
+        ),
+        pcqa_light_config=mp.AmbientLight(
+            global_ambient=RGB_07,
+            global_diffuse=RGB_07,
+            global_specular=RGB_00,
+        ),
+    ),
+    LightVariant(
+        name="headlight_ambient",
+        iqa_light_config=mp.Headlight(
+            global_ambient=RGB_07,
+            global_diffuse=RGB_07,
+            global_specular=RGB_00,
+        ),
+        pcqa_light_config=mp.AmbientLight(
+            global_ambient=RGB_07,
+            global_diffuse=RGB_07,
+            global_specular=RGB_00,
+        ),
+    ),
 )
 
 
@@ -96,7 +99,7 @@ class AblationRun(BaseModel):
 
 
 IqaKey = tuple[str, tuple[float, float, float]]
-PcqaKey = tuple[str, float]
+PcqaKey = tuple[str, float, int]
 
 
 class IqaTask(BaseModel):
@@ -116,6 +119,7 @@ class PcqaTask(BaseModel):
     config: MQAConfig
     run_name: str
     density_factor: float
+    search_size: int
 
 
 def direction_to_view_angle(
@@ -202,8 +206,15 @@ def build_run_config(
     view_angles: list[tuple[float, float, float]],
     light_variant: LightVariant,
     density_factor: float,
+    search_size: int,
 ) -> MQAConfig:
-    return build_mqa_config(base_config, view_angles, light_variant, density_factor)
+    return build_mqa_config(
+        base_config,
+        view_angles,
+        light_variant,
+        density_factor,
+        search_size,
+    )
 
 
 def build_iqa_projection_config(
@@ -240,9 +251,10 @@ def build_mqa_config(
     view_angles: list[tuple[float, float, float]],
     light_variant: LightVariant,
     density_factor: float,
+    search_size: int,
 ) -> MQAConfig:
     return MQAConfig(
-        search_size=base_config.search_size,
+        search_size=search_size,
         render_config=base_config.render_config,
         iqa_projection_config=build_iqa_projection_config(
             base_config,
@@ -258,7 +270,7 @@ def build_mqa_config(
 
 
 def build_runs() -> list[AblationRun]:
-    baseline_config = TexturedMeshQualityConfig()
+    baseline_config = TSMDConfig()
     baseline_light = LIGHT_VARIANTS[0]
     runs = []
 
@@ -268,6 +280,7 @@ def build_runs() -> list[AblationRun]:
             build_view_angles(view_count, baseline_config),
             baseline_light,
             baseline_config.pcqa_projection_config.density_factor,
+            baseline_config.search_size,
         )
         runs.append(
             AblationRun(
@@ -284,6 +297,7 @@ def build_runs() -> list[AblationRun]:
             list(baseline_config.view_angles),
             light_variant,
             baseline_config.pcqa_projection_config.density_factor,
+            baseline_config.search_size,
         )
         runs.append(
             AblationRun(
@@ -300,8 +314,27 @@ def build_runs() -> list[AblationRun]:
             list(baseline_config.view_angles),
             baseline_light,
             density_factor,
+            baseline_config.search_size,
         )
         run_name = f"density_{str(density_factor).replace('.', '_')}"
+        runs.append(
+            AblationRun(
+                name=run_name,
+                config=run_config,
+                light_variant=baseline_light.name,
+                output_csv=OUTPUT_DIR / f"{run_name}.csv",
+            )
+        )
+
+    for search_size in SEARCH_SIZES:
+        run_config = build_run_config(
+            baseline_config,
+            list(baseline_config.view_angles),
+            baseline_light,
+            baseline_config.pcqa_projection_config.density_factor,
+            search_size,
+        )
+        run_name = f"search_size_{search_size}"
         runs.append(
             AblationRun(
                 name=run_name,
@@ -350,7 +383,8 @@ def make_result_row(
             (run.light_variant, view_angle)
         ]
     density_factor = run.config.pcqa_projection_config.density_factor
-    result_row.update(pcqa_scores[(run.light_variant, density_factor)])
+    pcqa_key = (run.light_variant, density_factor, run.config.search_size)
+    result_row.update(pcqa_scores[pcqa_key])
     return result_row
 
 
@@ -412,13 +446,14 @@ def build_pcqa_tasks(runs: list[AblationRun]) -> dict[PcqaKey, PcqaTask]:
     tasks = {}
     for run in runs:
         density_factor = run.config.pcqa_projection_config.density_factor
-        key = (run.light_variant, density_factor)
+        key = (run.light_variant, density_factor, run.config.search_size)
         if key not in tasks:
             tasks[key] = PcqaTask(
                 key=key,
                 config=run.config,
                 run_name=run.name,
                 density_factor=density_factor,
+                search_size=run.config.search_size,
             )
     return tasks
 
@@ -466,7 +501,8 @@ def compute_pcqa_scores(
     for key, task in tasks.items():
         if progress_bar is not None:
             progress_bar.set_postfix_str(
-                f"PCQA {task.run_name} | density={task.density_factor}"
+                f"PCQA {task.run_name} | density={task.density_factor} | "
+                f"search={task.search_size}"
             )
 
         started_at = time.time()
@@ -529,7 +565,8 @@ def run_cached_ablation_study(runs: list[AblationRun]) -> None:
         density_factor = run.config.pcqa_projection_config.density_factor
         output_bar.set_postfix_str(
             f"{run.name} | views={len(run.config.view_angles)} | "
-            f"light={run.light_variant} | density={density_factor}"
+            f"light={run.light_variant} | density={density_factor} | "
+            f"search={run.config.search_size}"
         )
 
     row_bar = tqdm(df.iterrows(), desc="Running ablation study", total=len(df))
