@@ -475,18 +475,19 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=2.2.4" },
-    { name = "open3d", marker = "extra == 'examples'", specifier = ">=0.19.0" },
-    { name = "opencv-python", marker = "extra == 'examples'", specifier = ">=4.11.0.86" },
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "toml", specifier = ">=0.10.2" },
 ]
-provides-extras = ["examples"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "maturin", specifier = ">=1.8.3" },
+    { name = "maturin", specifier = ">=1.13.1" },
     { name = "patchelf", specifier = ">=0.17.2.2" },
     { name = "ruff", specifier = ">=0.11.3" },
+]
+examples = [
+    { name = "open3d", specifier = ">=0.19.0" },
+    { name = "opencv-python", specifier = ">=4.11.0.86" },
 ]
 
 [[package]]
@@ -979,7 +980,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "maturin", specifier = ">=1.8.3" },
+    { name = "maturin", specifier = ">=1.13.1" },
     { name = "patchelf", specifier = ">=0.17.2.2" },
     { name = "ruff", specifier = ">=0.11.3" },
 ]
