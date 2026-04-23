@@ -19,20 +19,44 @@ dependencies = [
     "pointpca3",
     "scikit-learn>=1.6.1",
     "scipy>=1.15.2",
-    "torch>=2.6.0",
     "tqdm>=4.67.1",
     "xgboost>=2.1.4",
     "xlsxwriter>=3.2.2",
 ]
 
-[tool.uv.sources]
-mesh-projector = { path = "../mesh-projector-pylib" }
-pointpca3 = { path = "../pointpca3-pylib" }
+[project.optional-dependencies]
+rocm = [
+    "torch>=2.6.0",
+    "pytorch-triton-rocm>=3.5.1",
+]
 
 [dependency-groups]
+pypi-torch = [
+    "torch>=2.6.0",
+]
 dev = [
     "ruff>=0.11.3",
 ]
+
+[tool.uv]
+default-groups = ["pypi-torch"]
+conflicts = [
+  [
+    { group = "pypi-torch" },
+    { extra = "rocm" },
+  ],
+]
+
+[tool.uv.sources]
+mesh-projector = { path = "../mesh-projector-pylib" }
+pointpca3 = { path = "../pointpca3-pylib" }
+torch = [{ index = "pytorch-rocm", extra = "rocm" }]
+pytorch-triton-rocm = [{ index = "pytorch-rocm", extra = "rocm" }]
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm6.3"
+explicit = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
