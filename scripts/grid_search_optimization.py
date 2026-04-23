@@ -14,25 +14,23 @@ The search evaluates model performance using GroupKFold cross-validation.
 import argparse
 import json
 import os
-import sys
 import time
 import warnings
 from copy import deepcopy
-from pathlib import Path
 
+import mesh_projector as mp
 import numpy as np
 import pandas as pd
-from absl import app
 import xgboost as xgb
+from absl import app
 from absl.flags import argparse_flags
+from dataset_configs import TexturedMeshQualityConfig
+from main_experiment import DEFAULT_MAX_WORKERS, compute_features
 from scipy.stats import pearsonr, spearmanr
-from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
+from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
 from sklearn.model_selection import GroupKFold
 from sklearn.svm import SVR
 from tqdm import tqdm
-
-# Add parent directory to path to import mqa_project
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 warnings.filterwarnings("ignore")
 
@@ -77,6 +75,12 @@ def parse_args(argv):
         type=int,
         default=None,
         help="Maximum number of samples to use (for faster testing)",
+    )
+    parser.add_argument(
+        "--max_workers",
+        type=int,
+        default=DEFAULT_MAX_WORKERS,
+        help="Number of worker threads to use for PointPCA3 PCQA computation",
     )
     parser.add_argument(
         "--search_sizes",
@@ -461,103 +465,97 @@ def generate_light_config(light_type, ambient, diffuse, specular, positions=None
     return config
 
 
-def extract_features_with_params(
-    dataset_csv, dataset_base_path, params, max_samples=None
-):
-    """
-    Extract features using specified parameters by modifying mqa_project module.
-    Returns a DataFrame with the extracted features.
-    """
-    import importlib
-    import mqa_project
-    import mesh_projector as mp
+def build_mqa_config_from_params(params):
+    light_iqa_cfg = params["light_config_iqa"]
+    light_pcqa_cfg = params["light_config_pcqa"]
 
-    # Reload the module to ensure we get fresh parameters
-    importlib.reload(mqa_project)
-
-    # Temporarily modify the parameters
-    original_params = {
-        "SEARCH_SIZE": mqa_project.SEARCH_SIZE,
-        "PC_DENSITY": mqa_project.PC_DENSITY,
-        "RENDER_CONFIG": mqa_project.RENDER_CONFIG,
-        "LIGHT_CONFIG_IQA": mqa_project.LIGHT_CONFIG_IQA,
-        "LIGHT_CONFIG_PCQA": mqa_project.LIGHT_CONFIG_PCQA,
-    }
-
-    try:
-        # Set new parameters
-        mqa_project.SEARCH_SIZE = params["search_size"]
-        mqa_project.PC_DENSITY = params["pc_density"]
-
-        # Update render config
-        mqa_project.RENDER_CONFIG = mp.RenderConfig(
-            resolution=params["resolution"],
-            ignore_opacity=True,
+    if light_iqa_cfg["type"] == "PointLights":
+        light_config_iqa = mp.PointLights(
+            positions=light_iqa_cfg.get(
+                "positions", [(-1.0, 1.0, 1.0), (1.0, 1.0, -1.0)]
+            ),
+            global_ambient=light_iqa_cfg["global_ambient"],
+            global_diffuse=light_iqa_cfg["global_diffuse"],
+            global_specular=light_iqa_cfg["global_specular"],
+        )
+    else:
+        light_config_iqa = mp.Headlight(
+            global_ambient=light_iqa_cfg["global_ambient"],
+            global_diffuse=light_iqa_cfg["global_diffuse"],
+            global_specular=light_iqa_cfg["global_specular"],
         )
 
-        # Update light configs
-        light_iqa_cfg = params["light_config_iqa"]
-        light_pcqa_cfg = params["light_config_pcqa"]
+    if light_pcqa_cfg["type"] == "PointLights":
+        light_config_pcqa = mp.PointLights(
+            positions=light_pcqa_cfg.get(
+                "positions", [(-1.0, 1.0, 1.0), (1.0, 1.0, -1.0)]
+            ),
+            global_ambient=light_pcqa_cfg["global_ambient"],
+            global_diffuse=light_pcqa_cfg["global_diffuse"],
+            global_specular=light_pcqa_cfg["global_specular"],
+        )
+    else:
+        light_config_pcqa = mp.Headlight(
+            global_ambient=light_pcqa_cfg["global_ambient"],
+            global_diffuse=light_pcqa_cfg["global_diffuse"],
+            global_specular=light_pcqa_cfg["global_specular"],
+        )
 
-        if light_iqa_cfg["type"] == "PointLights":
-            mqa_project.LIGHT_CONFIG_IQA = mp.PointLights(
-                positions=light_iqa_cfg.get(
-                    "positions", [(-1.0, 1.0, 1.0), (1.0, 1.0, -1.0)]
-                ),
-                global_ambient=light_iqa_cfg["global_ambient"],
-                global_diffuse=light_iqa_cfg["global_diffuse"],
-                global_specular=light_iqa_cfg["global_specular"],
+    baseline_config = TexturedMeshQualityConfig()
+    return baseline_config.model_copy(
+        deep=True,
+        update={
+            "search_size": params["search_size"],
+            "render_config": mp.RenderConfig(
+                resolution=params["resolution"],
+                ignore_opacity=True,
+            ),
+            "iqa_projection_config": baseline_config.iqa_projection_config.model_copy(
+                deep=True,
+                update={"light_config": light_config_iqa},
+            ),
+            "pcqa_projection_config": baseline_config.pcqa_projection_config.model_copy(
+                deep=True,
+                update={
+                    "density_factor": params["pc_density"],
+                    "light_config": light_config_pcqa,
+                },
+            ),
+        },
+    )
+
+
+def extract_features_with_params(
+    dataset_csv,
+    dataset_base_path,
+    params,
+    max_samples=None,
+    max_workers=DEFAULT_MAX_WORKERS,
+):
+    """
+    Extract features using specified parameters.
+    Returns a DataFrame with the extracted features.
+    """
+    run_config = build_mqa_config_from_params(params)
+    df = pd.read_csv(dataset_csv)
+    if max_samples is not None and max_samples < len(df):
+        df = df.sample(n=max_samples, random_state=42).reset_index(drop=True)
+
+    result_rows = []
+    for idx, row in tqdm(
+        df.iterrows(), desc="Extracting features", total=len(df), leave=False
+    ):
+        try:
+            result_row = compute_features(
+                row, dataset_base_path, run_config, max_workers
             )
-        else:  # Headlight
-            mqa_project.LIGHT_CONFIG_IQA = mp.Headlight(
-                global_ambient=light_iqa_cfg["global_ambient"],
-                global_diffuse=light_iqa_cfg["global_diffuse"],
-                global_specular=light_iqa_cfg["global_specular"],
-            )
+            result_rows.append(result_row)
+        except Exception as e:
+            print(f"Error processing row {idx}: {e}")
+            continue
 
-        if light_pcqa_cfg["type"] == "PointLights":
-            mqa_project.LIGHT_CONFIG_PCQA = mp.PointLights(
-                positions=light_pcqa_cfg.get(
-                    "positions", [(-1.0, 1.0, 1.0), (1.0, 1.0, -1.0)]
-                ),
-                global_ambient=light_pcqa_cfg["global_ambient"],
-                global_diffuse=light_pcqa_cfg["global_diffuse"],
-                global_specular=light_pcqa_cfg["global_specular"],
-            )
-        else:  # Headlight
-            mqa_project.LIGHT_CONFIG_PCQA = mp.Headlight(
-                global_ambient=light_pcqa_cfg["global_ambient"],
-                global_diffuse=light_pcqa_cfg["global_diffuse"],
-                global_specular=light_pcqa_cfg["global_specular"],
-            )
-
-        # Load dataset
-        df = pd.read_csv(dataset_csv)
-        if max_samples is not None and max_samples < len(df):
-            df = df.sample(n=max_samples, random_state=42).reset_index(drop=True)
-
-        # Extract features
-        result_rows = []
-        for idx, row in tqdm(
-            df.iterrows(), desc="Extracting features", total=len(df), leave=False
-        ):
-            try:
-                result_row = mqa_project.compute_features(row, dataset_base_path)
-                result_rows.append(result_row)
-            except Exception as e:
-                print(f"Error processing row {idx}: {e}")
-                continue
-
-        result_df = pd.DataFrame(result_rows)
-        return result_df
-
-    finally:
-        # Restore original parameters
-        mqa_project.SEARCH_SIZE = original_params["SEARCH_SIZE"]
-        mqa_project.PC_DENSITY = original_params["PC_DENSITY"]
-        mqa_project.RENDER_CONFIG = original_params["RENDER_CONFIG"]
-        mqa_project.LIGHT_CONFIG_IQA = original_params["LIGHT_CONFIG_IQA"]
-        mqa_project.LIGHT_CONFIG_PCQA = original_params["LIGHT_CONFIG_PCQA"]
+    result_df = pd.DataFrame(result_rows)
+    return result_df
 
 
 def generate_parameter_grid(args):
@@ -714,6 +712,7 @@ def run_grid_search(args):
                     args.dataset_base_path,
                     mqa_params,
                     max_samples=args.max_samples,
+                    max_workers=args.max_workers,
                 )
 
                 # Save features if requested

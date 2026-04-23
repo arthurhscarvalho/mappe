@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mqa-project"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "absl-py>=2.2.2",
+    "lazypredict>=0.2.16",
+    "matplotlib>=3.10.1",
+    "mesh-projector",
+    "numpy>=2.2.4",
+    "pandas>=2.2.3",
+    "piq>=0.8.0",
+    "pointpca3",
+    "scikit-learn>=1.6.1",
+    "scipy>=1.15.2",
+    "torch>=2.6.0",
+    "tqdm>=4.67.1",
+    "xgboost>=2.1.4",
+    "xlsxwriter>=3.2.2",
+]
+
+[tool.uv.sources]
+mesh-projector = { path = "../mesh-projector-pylib" }
+pointpca3 = { path = "../pointpca3-pylib" }
+
+[dependency-groups]
+dev = [
+    "ruff>=0.11.3",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
