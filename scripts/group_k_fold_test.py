@@ -6,9 +6,9 @@ import pandas as pd
 from absl import app
 from absl.flags import argparse_flags
 from lazypredict.Supervised import LazyRegressor
-from tqdm import tqdm
 from scipy.stats import pearsonr, spearmanr
 from sklearn.model_selection import GroupKFold
+from tqdm import tqdm
 
 
 def parse_args(argv):
