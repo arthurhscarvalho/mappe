@@ -15,7 +15,7 @@ warnings.filterwarnings("ignore")
 print(f"CUDA available: {torch.cuda.is_available()}")
 
 
-def init_dists(device: torch.device) -> DISTS:
+def _init_dists(device: torch.device) -> DISTS:
     model = DISTS(reduction="none").to(device)
     return model
 
@@ -39,7 +39,7 @@ def process_io(
                 render_config=render_config,
             ),
             executor.submit(
-                init_dists,
+                _init_dists,
                 device,
             ),
         ]
@@ -50,9 +50,37 @@ def process_io(
     return ref_mesh, dst_mesh, dists
 
 
-def prepare_single_tensor(array: np.ndarray, device: torch.device):
-    tensor = torch.tensor(array, dtype=torch.float32, device=device)
-    tensor = tensor.permute(0, 3, 1, 2).div(255.0)
+def _crop_to_occupancy_square(image: np.ndarray, occupancy: np.ndarray) -> np.ndarray:
+    if image.shape[:2] != occupancy.shape[:2]:
+        raise ValueError("Image and occupancy map must share spatial dimensions.")
+    foreground = occupancy > 0
+    if not np.any(foreground):
+        return image
+    rows, cols = np.where(foreground)
+    row_min, row_max = rows.min(), rows.max() + 1
+    col_min, col_max = cols.min(), cols.max() + 1
+    height = row_max - row_min
+    width = col_max - col_min
+    side = max(height, width)
+    image_height, image_width = image.shape[:2]
+    if side > image_height or side > image_width:
+        return image
+    row_padding = side - height
+    col_padding = side - width
+    row_start = row_min - (row_padding // 2)
+    col_start = col_min - (col_padding // 2)
+    row_start = min(max(row_start, 0), image_height - side)
+    col_start = min(max(col_start, 0), image_width - side)
+    row_end = row_start + side
+    col_end = col_start + side
+    return image[row_start:row_end, col_start:col_end, ...]
+
+
+def _prepare_single_tensor(array: np.ndarray, device: torch.device):
+    tensor = torch.from_numpy(array)  # zero-copy
+    tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # HWC -> BCHW
+    tensor = tensor.to(device=device, dtype=torch.float32)  # move + cast once
+    tensor = tensor.div_(255.0)  # in-place division
     return tensor
 
 
@@ -63,16 +91,23 @@ def process_iqa(
     dists: DISTS,
     device: torch.device,
 ) -> dict:
-    ref_projs, _, _, _ = mp.project_to_images(
+    ref_projs, _, _, ref_ocps = mp.project_to_images(
         ref_mesh, mqa_config.iqa_projection_config, mqa_config.view_angles
     )
-    dst_projs, _, _, _ = mp.project_to_images(
+    dst_projs, _, _, dst_ocps = mp.project_to_images(
         dst_mesh, mqa_config.iqa_projection_config, mqa_config.view_angles
     )
     with torch.no_grad():
-        ref_projs = prepare_single_tensor(ref_projs, device)
-        dst_projs = prepare_single_tensor(dst_projs, device)
-        iqa_indices = [i.item() for i in dists(ref_projs, dst_projs)]
+        iqa_indices = []
+        for ref_proj, dst_proj, ref_ocp, dst_ocp in zip(
+            ref_projs, dst_projs, ref_ocps, dst_ocps
+        ):
+            combined_occupancy = (ref_ocp > 0) | (dst_ocp > 0)
+            ref_crop = _crop_to_occupancy_square(ref_proj, combined_occupancy)
+            dst_crop = _crop_to_occupancy_square(dst_proj, combined_occupancy)
+            ref_tensor = _prepare_single_tensor(ref_crop, device)
+            dst_tensor = _prepare_single_tensor(dst_crop, device)
+            iqa_indices.append(dists(ref_tensor, dst_tensor).item())
     indices_data = {}
     for i, m in enumerate(iqa_indices):
         indices_data[f"QUALITY_INDEX_IQA_{i}"] = m
