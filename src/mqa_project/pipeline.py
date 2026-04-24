@@ -59,10 +59,11 @@ def process_io(
     return ref_mesh, dst_mesh, dists
 
 
-def prepare_single_tensor(array: np.ndarray, device: torch.device):
-    tensor = torch.from_numpy(array)  # zero-copy
-    tensor = tensor.permute(0, 3, 1, 2)  # NHWC -> NCHW
+def prepare_projection_tensor(array: np.ndarray, device: torch.device):
+    tensor = torch.from_numpy(array)
     tensor = tensor.to(device=device, dtype=torch.float32)  # move + cast together
+    tensor = tensor.narrow(-1, 0, 3)  # RGBA -> RGB
+    tensor = tensor.permute(0, 3, 1, 2).contiguous()  # NHWC -> NCHW
     tensor = tensor.div_(255.0)  # in-place normalization
     return tensor
 
@@ -81,8 +82,8 @@ def process_iqa(
         dst_mesh, mqa_config.iqa_projection_config, mqa_config.view_angles
     )
     with torch.no_grad():
-        ref_projs = prepare_single_tensor(ref_projs, device)
-        dst_projs = prepare_single_tensor(dst_projs, device)
+        ref_projs = prepare_projection_tensor(ref_projs, device)
+        dst_projs = prepare_projection_tensor(dst_projs, device)
         iqa_indices = [i.item() for i in dists(ref_projs, dst_projs)]
     indices_data = {}
     for i, m in enumerate(iqa_indices):
