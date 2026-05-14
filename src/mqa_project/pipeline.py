@@ -1,18 +1,33 @@
+import logging
 import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor, wait
+from typing import Callable, Literal
 
 import mesh_projector as mp
-import numpy as np
 import torch
+from numpy.typing import NDArray
 from piq import DISTS
+from pointpca2 import compute_pointpca2
 from pointpca3 import compute_pointpca3
 
 from .schemas import MQAConfig
 
-# Ignore tensorflow warnings
+# Ignore unnecessary warnings
 warnings.filterwarnings("ignore")
-print(f"CUDA available: {torch.cuda.is_available()}")
+logging.info(f"CUDA available: {torch.cuda.is_available()}")
+PointPCABackend = Literal["pointpca3", "pointpca2_rs"]
+PointPCAFunction = Callable[[NDArray, NDArray, NDArray, NDArray, int, int], NDArray]
+
+
+def get_pointpca_backend(backend: PointPCABackend = "pointpca3") -> PointPCAFunction:
+    if backend == "pointpca3":
+        return compute_pointpca3
+    if backend == "pointpca2_rs":
+        return compute_pointpca2
+    raise ValueError(
+        f"Unsupported PointPCA backend '{backend}'. Expected 'pointpca3' or 'pointpca2_rs'."
+    )
 
 
 def _init_dists(device: torch.device) -> DISTS:
@@ -59,8 +74,15 @@ def process_io(
     return ref_mesh, dst_mesh, dists
 
 
-def prepare_projection_tensor(array: np.ndarray, device: torch.device):
-    tensor = torch.from_numpy(array)
+def prepare_projection_tensor(array: NDArray, device: torch.device):
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"The given NumPy array is not writable.*",
+            category=UserWarning,
+        )
+        # No problem here since we won't write to this array
+        tensor = torch.from_numpy(array)
     tensor = tensor.to(device=device, dtype=torch.float32)  # move + cast together
     tensor = tensor.narrow(-1, 0, 3)  # RGBA -> RGB
     tensor = tensor.permute(0, 3, 1, 2).contiguous()  # NHWC -> NCHW
@@ -96,13 +118,16 @@ def process_pcqa(
     dst_mesh: mp.Mesh,
     mqa_config: MQAConfig,
     max_workers: int,
+    pointpca_backend: PointPCABackend = "pointpca3",
 ) -> dict:
     ref_pc = mp.project_to_point_cloud(ref_mesh, mqa_config.pcqa_projection_config)
     dst_pc = mp.project_to_point_cloud(dst_mesh, mqa_config.pcqa_projection_config)
-    pcqa_indices = compute_pointpca3(
+    compute_pointpca = get_pointpca_backend(pointpca_backend)
+    pcqa_indices = compute_pointpca(
         *ref_pc, *dst_pc, mqa_config.search_size, max_workers
     )
     indices_data = {
+        "POINTPCA_BACKEND": pointpca_backend,
         "PCQA_REF_PC_NUM_POINTS": ref_pc[0].shape[0],
         "PCQA_DST_PC_NUM_POINTS": dst_pc[0].shape[0],
     }
@@ -117,6 +142,7 @@ def process_mqa(
     mqa_config: MQAConfig,
     device: torch.device,
     max_workers: int,
+    pointpca_backend: PointPCABackend = "pointpca3",
 ) -> dict:
     with ThreadPoolExecutor() as executor:
         t0 = time.time()
@@ -126,7 +152,14 @@ def process_mqa(
         t1 = time.time()
         futures = [
             executor.submit(process_iqa, ref_mesh, dst_mesh, mqa_config, dists, device),
-            executor.submit(process_pcqa, ref_mesh, dst_mesh, mqa_config, max_workers),
+            executor.submit(
+                process_pcqa,
+                ref_mesh,
+                dst_mesh,
+                mqa_config,
+                max_workers,
+                pointpca_backend,
+            ),
         ]
         wait(futures)
         for future in futures:
