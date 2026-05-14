@@ -13,8 +13,6 @@ from pointpca3 import compute_pointpca3
 
 from .schemas import MQAConfig
 
-# Ignore unnecessary warnings
-warnings.filterwarnings("ignore")
 logging.info(f"CUDA available: {torch.cuda.is_available()}")
 PointPCABackend = Literal["pointpca3", "pointpca2_rs"]
 PointPCAFunction = Callable[[NDArray, NDArray, NDArray, NDArray, int, int], NDArray]
@@ -31,7 +29,20 @@ def get_pointpca_backend(backend: PointPCABackend = "pointpca3") -> PointPCAFunc
 
 
 def _init_dists(device: torch.device) -> DISTS:
-    model = DISTS(reduction="none").to(device)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"The parameter 'pretrained' is deprecated since 0\.13.*",
+            category=UserWarning,
+            module=r"torchvision\.models\._utils",
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message=r"Arguments other than a weight enum or `None` for 'weights' are deprecated since 0\.13.*",
+            category=UserWarning,
+            module=r"torchvision\.models\._utils",
+        )
+        model = DISTS(reduction="none").to(device)
     return model
 
 
