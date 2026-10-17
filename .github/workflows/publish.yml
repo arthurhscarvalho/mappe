@@ -1,0 +1,92 @@
+name: Build and Publish Python Distributions
+
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build_distributions:
+    name: Build wheel and source distribution
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Check release version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: python
+        run: |
+          import os
+          import tomllib
+          from pathlib import Path
+
+          project = tomllib.loads(Path("pyproject.toml").read_text())
+          version = project["project"]["version"]
+          tag = os.environ["RELEASE_TAG"]
+          if tag.removeprefix("v") != version:
+              raise SystemExit(f"Release tag {tag!r} must match package version {version!r} (optionally prefixed with 'v').")
+
+      - name: Install build tools
+        run: python -m pip install --upgrade build twine
+
+      # MAPPE is pure Python; its Rust-backed dependencies come from PyPI.
+      # The default build creates a source archive, then builds its wheel.
+      - name: Build distributions
+        run: python -m build
+
+      - name: Check distributions
+        run: python -m twine check dist/*
+
+      - name: Upload distributions artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  publish_distributions:
+    name: Publish distributions to PyPI
+    needs: build_distributions
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download distributions artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: python-distributions
+          path: dist
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install Twine
+        run: python -m pip install --upgrade twine
+
+      - name: Publish distributions to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          # Configure this secret in the mappe repository.
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+          TWINE_NON_INTERACTIVE: '1'
+        run: python -m twine upload --skip-existing dist/*
