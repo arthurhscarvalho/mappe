@@ -7,17 +7,17 @@ name = "mappe"
 version = "0.1.0"
 description = ""
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "absl-py>=2.2.2",
     "lazypredict>=0.2.16",
     "matplotlib>=3.10.1",
-    "mesh-projector",
+    "mesh-projector==1.0.0",
     "numpy>=2.2.4",
     "pandas>=2.2.3",
     "piq>=0.8.0",
     "pointpca2",
-    "pointpca3",
+    "pointpca3==1.0.0",
     "psutil>=7.0.0",
     "scikit-learn>=1.6.1",
     "scipy>=1.15.2",
@@ -52,8 +52,6 @@ conflicts = [
 ]
 
 [tool.uv.sources]
-mesh-projector = { path = "../mesh-projector-pylib" }
-pointpca3 = { path = "../pointpca3-pylib" }
 torch = [{ index = "pytorch-rocm", extra = "rocm" }]
 pytorch-triton-rocm = [{ index = "pytorch-rocm", extra = "rocm" }]
 torchvision = [{ index = "pytorch-rocm", extra = "rocm" }]
