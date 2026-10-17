@@ -2,7 +2,7 @@ from math import pi as PI
 from typing import List, Tuple
 
 import mesh_projector as mp
-from mqa_project import MQAConfig
+from mappe import MQAConfig
 
 CUBE_VIEW_ANGLES: List[Tuple[float, float, float]] = [
     (0.0, 0.0, 0.0),  # Front: Cam at +Z, looking -Z.

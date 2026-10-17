@@ -1,13 +1,13 @@
 import os
 from pathlib import Path
 
-import mqa_project
+import mappe
 import pandas as pd
 import torch
 from dataset_configs import (
     TexturedMeshQualityConfig,
 )
-from mqa_project import MQAConfig
+from mappe import MQAConfig
 from tqdm import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -27,7 +27,7 @@ def compute_features(
         os.path.join(dataset_base_path, row["SIGNAL_OBJ_LOCATION"])
     )
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    mqa_features = mqa_project.process_mqa(
+    mqa_features = mappe.process_mqa(
         ref_obj_location,
         dst_obj_location,
         mqa_config,
