@@ -19,15 +19,29 @@ The Python distribution and import are both named `mappe`.
 
 ## Requirements
 
-- Python 3.11 or 3.12 and [uv](https://docs.astral.sh/uv/).
-- Git to clone the repository and network access to download Python packages.
-- Mesh datasets, including OBJ files and any associated MTL files and texture images.
+- Python 3.11 or 3.12.
+- Network access to download Python packages and pretrained image metric weights on first use.
+- Reference and distorted OBJ meshes, including any associated MTL files and texture images.
 
-The package requires Python `>=3.11,<3.13`; its mesh-projector dependency uses `enum.StrEnum`, which requires Python 3.11 or later. A GPU is optional for the default CPU mesh renderer and CPU PyTorch execution. GPU execution requires compatible hardware and drivers.
+A GPU is optional. CPU rendering and PyTorch execution are supported.
 
 ## Installation
 
-Clone MAPPE and install the default environment:
+### From PyPI
+
+Install [MAPPE from PyPI](https://pypi.org/project/mappe/) in your Python environment:
+
+```bash
+pip install mappe
+```
+
+Dependencies are installed automatically, including the PointPCA and mesh-projector packages. Their published wheels include the Rust extensions.
+
+For CUDA or ROCm, install a matching `torch` and `torchvision` pair using [PyTorch's installation instructions](https://pytorch.org/get-started/locally/) before installing MAPPE. Use `torchvision>=0.24.1` so pip can retain the installed pair. Both backends use `device="cuda"`.
+
+### From the repository
+
+For experiments or development, clone the repository and install its environment with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 git clone https://github.com/arthurhscarvalho/mappe.git mappe
@@ -35,15 +49,13 @@ cd mappe
 uv sync --python 3.12
 ```
 
-MAPPE installs `mesh-projector==1.0.0` and `pointpca3==1.0.0` from PyPI. Their published wheels include the Rust extensions, so supported platforms require no Rust toolchain or sibling repository checkouts. `pointpca2` is also resolved from PyPI.
-
-For the configured AMD ROCm environment, use:
+For the repository's ROCm 6.3 environment:
 
 ```bash
 uv sync --python 3.12 --no-default-groups --extra rocm
 ```
 
-This selects the ROCm 6.3 package index configured in [pyproject.toml](pyproject.toml). Use a compatible ROCm installation and GPU. Run subsequent `uv run` commands with `--no-default-groups --extra rocm` as well, for example `uv run --no-default-groups --extra rocm python scripts/main_experiment.py`.
+Include `--no-default-groups --extra rocm` in subsequent `uv run` commands as well.
 
 ## Usage
 
