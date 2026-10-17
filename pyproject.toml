@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mappe"
-version = "0.1.0"
-description = ""
+version = "1.0.0"
+description = "Full-reference mesh quality assessment using point cloud and projection features."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
