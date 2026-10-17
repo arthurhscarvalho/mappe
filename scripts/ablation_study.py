@@ -4,11 +4,11 @@ import time
 from pathlib import Path
 
 import mesh_projector as mp
-import mqa_project
+import mappe
 import pandas as pd
 import torch
 from dataset_configs import TSMDConfig
-from mqa_project import MQAConfig
+from mappe import MQAConfig
 from pydantic import BaseModel, ConfigDict
 from tqdm import tqdm
 
@@ -406,7 +406,7 @@ def load_row_inputs(
     ref_obj_location, dst_obj_location = resolve_mesh_paths(row)
 
     started_at = time.time()
-    ref_mesh, dst_mesh, dists = mqa_project.process_io(
+    ref_mesh, dst_mesh, dists = mappe.process_io(
         ref_obj_location,
         dst_obj_location,
         render_config,
@@ -476,7 +476,7 @@ def compute_iqa_scores(
             )
 
         started_at = time.time()
-        iqa_data = mqa_project.process_iqa(
+        iqa_data = mappe.process_iqa(
             ref_mesh,
             dst_mesh,
             task.config,
@@ -506,7 +506,7 @@ def compute_pcqa_scores(
             )
 
         started_at = time.time()
-        scores[key] = mqa_project.process_pcqa(
+        scores[key] = mappe.process_pcqa(
             ref_mesh, dst_mesh, task.config, MAX_WORKERS
         )
         total_time += time.time() - started_at

@@ -3,7 +3,7 @@ requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mqa-project"
+name = "mappe"
 version = "0.1.0"
 description = ""
 readme = "README.md"

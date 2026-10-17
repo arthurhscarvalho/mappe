@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Iterable
 
 import mesh_projector as mp
-import mqa_project
+import mappe
 import numpy as np
 import pandas as pd
 import psutil
 import torch
 from dataset_configs import TSMDConfig
-from mqa_project.pipeline import PointPCABackend, get_pointpca_backend
+from mappe.pipeline import PointPCABackend, get_pointpca_backend
 from tqdm import tqdm
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -194,7 +194,7 @@ def compute_features(
     dst_obj_location = resolve_mesh_path(dataset_base_path, row["SIGNAL_OBJ_LOCATION"])
 
     t0 = time.perf_counter()
-    ref_mesh, dst_mesh, dists = mqa_project.process_io(
+    ref_mesh, dst_mesh, dists = mappe.process_io(
         ref_obj_location,
         dst_obj_location,
         mqa_config.render_config,
@@ -202,7 +202,7 @@ def compute_features(
     )
     t1 = time.perf_counter()
 
-    iqa_indices = mqa_project.process_iqa(
+    iqa_indices = mappe.process_iqa(
         ref_mesh,
         dst_mesh,
         mqa_config,
